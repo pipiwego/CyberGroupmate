@@ -57,10 +57,11 @@ export class DshCliLauncher implements HarnessLauncher {
             { ...process.env, DSH_HOME: homeDir },
         );
 
+        // 顺序要紧：--profile / --patch 是启动器选项，必须排在应用参数（--json、prompt）之前
         const args = [
             "--profile", "headless",
-            "--json",
             "--patch", patchPath,
+            "--json",
             options.prompt,
         ];
 
