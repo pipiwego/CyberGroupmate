@@ -776,7 +776,7 @@ export class HarnessManager {
                     onResult?.();
                 } else if (event.type === "final") {
                     // DSH headless --json：终止事件，text 即最终答案
-                    log.info("dsh harness final", { sessionId: event.sessionId });
+                    log.info("dsh harness final", { sessionId: event.sessionId ?? null });
                     if (typeof event.text === "string") {
                         record.resultSummary = event.text.slice(0, 500);
                     }
@@ -882,7 +882,7 @@ function summarizeHarnessEvent(event: Record<string, unknown>): string {
     }
     if (type === "tool_call") {
         const name = String(event.name ?? event.tool ?? "tool");
-        const args = event.arguments != null ? JSON.stringify(event.arguments) : "";
+        const args = event.input != null ? JSON.stringify(event.input) : "";
         return truncate(`tool_call: ${name} ${args}`, 700);
     }
     if (type === "tool_result") {

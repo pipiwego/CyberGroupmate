@@ -528,13 +528,13 @@
   }
 
   function dshToolCall(ev) {
-    return { kind: 'tool_use', tool: { name: ev.name ?? ev.tool, input: ev.arguments } };
+    return { kind: 'tool_use', tool: { name: ev.tool ?? ev.name, input: ev.input } };
   }
 
   function dshToolResult(ev) {
     return {
       kind: 'tool_result',
-      tool: { ok: ev.status !== 'failed' && ev.status !== 'error', name: ev.name, output: stringifyContent(ev.result) },
+      tool: { ok: ev.status !== 'failed' && ev.status !== 'error', name: ev.tool, output: stringifyContent(ev.result) },
     };
   }
 
