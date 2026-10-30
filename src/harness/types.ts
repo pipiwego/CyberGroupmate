@@ -8,6 +8,10 @@ export interface HarnessLaunchOptions {
     model?: string;
     maxBudgetUsd?: number;
     extraArgs?: string[];
+    /** 额外环境变量。各 harness 需要的凭据不同，由 manager 按配置注入 */
+    env?: NodeJS.ProcessEnv;
+    /** harness 专属 home 目录（目前只有 dsh 使用） */
+    harnessHome?: string;
 }
 
 export type HarnessMcpServerType = "streamable-http" | "stdio";
@@ -68,6 +72,8 @@ export interface HarnessRunRecord {
     pid?: number;
     durationMs?: number;
     costUsd?: number;
+    /** 累计 token 用量（DSH 在 step_end 事件里逐轮给） */
+    tokenUsage?: { input: number; output: number; cached: number; total: number };
     stderrTail?: string;
     resultSummary?: string;
     events: HarnessRunEvent[];

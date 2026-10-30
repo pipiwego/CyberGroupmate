@@ -15,7 +15,7 @@
   <i class="fa-solid fa-moon opacity-50 mr-1"></i> Background Agent
 </h3>
 <p class="text-xs opacity-50 mb-3">
-  做梦系统配置。MCP Server 暴露内部 API 给外部 harness（Claude Code / Codex CLI / Copilot CLI），harness 在后台执行任务。
+  做梦系统配置。MCP Server 暴露内部 API 给外部 harness（Claude Code / Codex CLI / Copilot CLI / DeepSeek Harness），harness 在后台执行任务。
 </p>
 
 <div class="cfg-grid-3">
@@ -46,13 +46,16 @@
       <option value="claude-code">Claude Code</option>
       <option value="codex">Codex CLI</option>
       <option value="copilot">Copilot CLI</option>
+      <option value="dsh">DeepSeek Harness (DSH)</option>
     </select>
   </label>
   <label class="cfg-field">
     <span class="cfg-label">模型</span>
     <input type="text" class="input input-xs input-bordered w-full"
       bind:value={config.backgroundAgent.harnessModel}
-      placeholder={config.backgroundAgent.harness === "claude-code" ? "claude-sonnet-4-6" : "gpt-5.2"} />
+      placeholder={config.backgroundAgent.harness === "dsh"
+        ? "deepseek-flash"
+        : config.backgroundAgent.harness === "claude-code" ? "claude-sonnet-4-6" : "gpt-5.2"} />
   </label>
   <label class="cfg-field">
     <span class="cfg-label">单次预算 (USD)</span>
@@ -80,6 +83,17 @@
       <input type="text" class="input input-xs input-bordered w-full"
         bind:value={config.backgroundAgent.copilotPath} placeholder="copilot" />
     </label>
+  {:else if config.backgroundAgent.harness === "dsh"}
+    <label class="cfg-field">
+      <span class="cfg-label">DSH 路径</span>
+      <input type="text" class="input input-xs input-bordered w-full"
+        bind:value={config.backgroundAgent.dshPath} placeholder="/app/dsh/npm/bin/dsh" />
+    </label>
+    <label class="cfg-field">
+      <span class="cfg-label">DSH HOME</span>
+      <input type="text" class="input input-xs input-bordered w-full"
+        bind:value={config.backgroundAgent.dshHome} placeholder="/app/dsh/home" />
+    </label>
   {/if}
   <label class="cfg-field">
     <span class="cfg-label">定时 Schedule (cron)</span>
@@ -105,4 +119,9 @@
 <p class="text-xs opacity-50 mt-1">
   强制最小间隔：距上次做梦不足该小时数时，定时触发会被跳过；防重启/cron 边界/重试叠加导致频繁做梦。设 0 关闭。
   空闲巡视最小间隔：系统空闲时的自动巡视同样受此节流；「有人找你」等真实通知不受限。设 0 关闭。
+</p>
+<p class="text-xs opacity-50 mt-1">
+  DSH HOME 留空时按 <code>DSH_HOME</code> 环境变量、再按 <code>~/.dsh</code> 解析。
+  给做梦系统单独指一个目录，避免与手动运行的 <code>dsh web</code> 互相覆盖配置与凭据。
+  DSH 的模型 Key 复用 llm_profiles 里的 DeepSeek 凭据，不需要单独填。
 </p>

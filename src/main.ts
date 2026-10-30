@@ -1357,14 +1357,33 @@ async function main(): Promise<void> {
 
     // ─── Background Agent HarnessManager ───
     const bgHarness = appConfig.backgroundAgent?.harness;
-    if (mcpServerInstance && (bgHarness === "claude-code" || bgHarness === "codex" || bgHarness === "copilot")) {
-        const { HarnessManager, ClaudeCodeLauncher, CodexCliLauncher, CopilotCliLauncher } = await import("./harness/index.js");
+    if (mcpServerInstance && (bgHarness === "claude-code" || bgHarness === "codex" || bgHarness === "copilot" || bgHarness === "dsh")) {
+        const { HarnessManager, ClaudeCodeLauncher, CodexCliLauncher, CopilotCliLauncher, DshCliLauncher } = await import("./harness/index.js");
         const { buildDreamingDigest } = await import("./harness/dreaming-context.js");
+        // DSH 复用 llm_profiles 里的 DeepSeek 凭据：后台做梦不该再让用户单独配一把 Key
+        const deepseekProfile = Object.values(appConfig.llmProfiles).find(
+            (profile) => /deepseek/i.test(profile.baseUrl ?? "") && Boolean(profile.apiKey),
+        );
+        const launchEnv: NodeJS.ProcessEnv = deepseekProfile?.apiKey
+            ? { DEEPSEEK_API_KEY: deepseekProfile.apiKey }
+            : {};
+        if (bgHarness === "dsh" && !deepseekProfile?.apiKey) {
+            log.warn("Background Agent 选用了 dsh，但 llm_profiles 里没有可用的 DeepSeek Key", {
+                profiles: Object.keys(appConfig.llmProfiles),
+            });
+        }
+
         const launcher = bgHarness === "copilot"
             ? new CopilotCliLauncher(appConfig.backgroundAgent!.copilotPath)
             : bgHarness === "codex"
                 ? new CodexCliLauncher(appConfig.backgroundAgent!.codexPath)
-                : new ClaudeCodeLauncher(appConfig.backgroundAgent!.claudeCodePath);
+                : bgHarness === "dsh"
+                    ? new DshCliLauncher({
+                        dshPath: appConfig.backgroundAgent!.dshPath,
+                        dshHome: appConfig.backgroundAgent!.dshHome,
+                        apiKey: deepseekProfile?.apiKey,
+                    })
+                    : new ClaudeCodeLauncher(appConfig.backgroundAgent!.claudeCodePath);
         const model = appConfig.backgroundAgent!.harnessModel ?? appConfig.backgroundAgent!.claudeModel;
         harnessManager = new HarnessManager({
             launcher,
@@ -1391,6 +1410,8 @@ async function main(): Promise<void> {
             idleMinIntervalMs: appConfig.backgroundAgent!.idleMinIntervalHours != null
                 ? appConfig.backgroundAgent!.idleMinIntervalHours * 60 * 60_000
                 : undefined,
+            dshHome: appConfig.backgroundAgent!.dshHome,
+            launchEnv,
         });
         harnessManager.onSpawnFailure = (error, pendingCount) => {
             globalState.addSessionDigest(`[Background Agent spawn failed] ${error} (${pendingCount} pending tasks)`, {

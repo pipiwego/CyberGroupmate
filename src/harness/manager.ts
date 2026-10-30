@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createLogger } from "../core/logger.js";
-import { getHarnessHome, getHarnessInstructionPath } from "./home.js";
+import { getDshHome, getHarnessHome, getHarnessInstructionPath } from "./home.js";
 import { buildSystemPrompt, buildTaskPrompt, renderPendingFile, selectPendingNotifications, PENDING_FILE } from "./prompt.js";
 import type {
     HarnessLauncher,
@@ -60,6 +60,10 @@ export interface HarnessManagerConfig {
      * 缺省取 DEFAULT_IDLE_MIN_INTERVAL_MS；显式传 0 关闭。
      */
     idleMinIntervalMs?: number;
+    /** DSH 专用 home 目录（目前只有 dsh 启动器使用），留空时按 DSH_HOME / ~/.dsh 解析 */
+    dshHome?: string;
+    /** 额外注入给 harness 子进程的环境变量（如 DEEPSEEK_API_KEY） */
+    launchEnv?: NodeJS.ProcessEnv;
 }
 
 export class HarnessManager {
@@ -278,8 +282,14 @@ export class HarnessManager {
 
         const runId = this.createRunId();
         const logPath = join(this.config.workDir, "workspace", "dream-journal", `${runId}.jsonl`);
-        const harnessHome = getHarnessHome();
-        const instructionPath = getHarnessInstructionPath(harnessHome, this.config.launcher.name);
+        const harnessHome = this.config.launcher.name === "dsh"
+            ? getDshHome(process.env, this.config.dshHome)
+            : getHarnessHome();
+        const instructionPath = getHarnessInstructionPath(
+            harnessHome,
+            this.config.launcher.name,
+            { ...process.env, DSH_HOME: harnessHome },
+        );
         mkdirSync(join(this.config.workDir, "workspace", "dream-journal"), { recursive: true });
         this.cleanupJournal();
 
@@ -311,6 +321,8 @@ export class HarnessManager {
                 model: this.config.model,
                 maxBudgetUsd: this.config.maxBudgetUsd,
                 extraArgs: this.config.extraArgs,
+                env: this.config.launchEnv,
+                harnessHome,
             });
 
             record.pid = this.child.pid ?? undefined;
@@ -762,6 +774,30 @@ export class HarnessManager {
                 } else if (event.type === "turn.completed") {
                     log.debug("codex harness turn completed", { usage: event.usage });
                     onResult?.();
+                } else if (event.type === "final") {
+                    // DSH headless --json：终止事件，text 即最终答案
+                    log.info("dsh harness final", { sessionId: event.sessionId });
+                    if (typeof event.text === "string") {
+                        record.resultSummary = event.text.slice(0, 500);
+                    }
+                    if (typeof event.sessionId === "string") {
+                        record.resultSummary = record.resultSummary
+                            ?? `[dsh] session ${event.sessionId}`;
+                    }
+                    onResult?.();
+                } else if (event.type === "status") {
+                    // DSH：step_end 携带本轮 token 用量，累计到运行记录
+                    const usage = event.usage && typeof event.usage === "object"
+                        ? event.usage as Record<string, unknown>
+                        : null;
+                    if (event.phase === "step_end" && usage) {
+                        const acc = record.tokenUsage ?? { input: 0, output: 0, cached: 0, total: 0 };
+                        acc.input += Number(usage.inputTokens ?? 0) || 0;
+                        acc.output += Number(usage.outputTokens ?? 0) || 0;
+                        acc.cached += Number(usage.cacheReadTokens ?? 0) || 0;
+                        acc.total += Number(usage.totalTokens ?? 0) || 0;
+                        record.tokenUsage = acc;
+                    }
                 }
             } catch {
                 log.debug("harness stdout", { line: line.slice(0, 200) });
@@ -817,6 +853,44 @@ function trimJsonForDashboard(value: Record<string, unknown>): Record<string, un
 
 function summarizeHarnessEvent(event: Record<string, unknown>): string {
     const type = String(event.type ?? "json");
+
+    // ─── DSH headless 事件 ───
+    if (type === "final") {
+        const text = typeof event.text === "string" ? event.text.trim() : "";
+        const reason = event.reason ? ` reason=${JSON.stringify(event.reason)}` : "";
+        return text ? `final:${reason} ${truncate(text, 500)}` : `final:${reason}`.trim();
+    }
+    if (type === "session") {
+        return `session: ${String(event.sessionId ?? "?")} cwd=${String(event.cwd ?? "?")}`;
+    }
+    if (type === "status") {
+        const phase = String(event.phase ?? "status");
+        if (phase === "step_end" && event.usage && typeof event.usage === "object") {
+            const u = event.usage as Record<string, unknown>;
+            return `status: ${phase} turn=${String(event.turn ?? "?")} step=${String(event.step ?? "?")} `
+                + `in=${String(u.inputTokens ?? 0)} out=${String(u.outputTokens ?? 0)} cached=${String(u.cacheReadTokens ?? 0)}`;
+        }
+        return `status: ${phase} turn=${String(event.turn ?? "?")}`;
+    }
+    if (type === "thinking") {
+        const text = typeof event.text === "string" ? event.text.trim() : "";
+        return text ? `thinking: ${truncate(text, 700)}` : "thinking:";
+    }
+    if (type === "text") {
+        const text = typeof event.text === "string" ? event.text.trim() : "";
+        return text ? `assistant: ${truncate(text, 700)}` : "assistant:";
+    }
+    if (type === "tool_call") {
+        const name = String(event.name ?? event.tool ?? "tool");
+        const args = event.arguments != null ? JSON.stringify(event.arguments) : "";
+        return truncate(`tool_call: ${name} ${args}`, 700);
+    }
+    if (type === "tool_result") {
+        const status = String(event.status ?? "");
+        const result = event.result != null ? String(event.result) : "";
+        return truncate(`tool_result: ${status} ${result}`, 700);
+    }
+
     if (type === "result") {
         const result = event.result != null ? String(event.result).trim() : "";
         const cost = event.cost_usd != null ? ` cost=$${event.cost_usd}` : "";

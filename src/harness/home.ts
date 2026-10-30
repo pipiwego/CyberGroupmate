@@ -8,6 +8,19 @@ export function getHarnessHome(env: NodeJS.ProcessEnv = process.env): string {
     return env.HOME || env.USERPROFILE || homedir();
 }
 
+/**
+ * 解析 DSH 的 home 目录。
+ * 优先用显式传入的值，其次 DSH_HOME 环境变量，最后退回 <HOME>/.dsh。
+ * 不允许与手动运行的 dsh 共用：共用会互相覆盖 profile 与凭据。
+ */
+export function getDshHome(env: NodeJS.ProcessEnv = process.env, explicit?: string): string {
+    const fromConfig = explicit?.trim();
+    if (fromConfig) return fromConfig;
+    const fromEnv = env.DSH_HOME?.trim();
+    if (fromEnv) return fromEnv;
+    return join(getHarnessHome(env), ".dsh");
+}
+
 export function getHarnessInstructionPath(
     homeDir: string,
     launcherName: HarnessInstructionTarget,
@@ -19,6 +32,10 @@ export function getHarnessInstructionPath(
     if (launcherName === "codex") {
         const codexHome = env.CODEX_HOME?.trim() || join(homeDir, ".codex");
         return join(codexHome, "AGENTS.override.md");
+    }
+    // DSH 读取 $DSH_HOME/AGENTS.md 作为用户全局指令
+    if (launcherName === "dsh") {
+        return join(getDshHome(env), "AGENTS.md");
     }
     return join(homeDir, ".claude", "CLAUDE.md");
 }

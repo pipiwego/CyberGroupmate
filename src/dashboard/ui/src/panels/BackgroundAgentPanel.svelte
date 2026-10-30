@@ -301,6 +301,15 @@
     if (type.startsWith('session.')) return [copilotSession(ev, type)];
     if (type.startsWith('assistant.')) return []; // 其余 assistant.* 为流式噪声
 
+    // DeepSeek Harness (dsh headless --json)
+    if (type === 'session' && ev.sessionId) return [dshSession(ev)];
+    if (type === 'status') return dshStatus(ev);
+    if (type === 'thinking') return [{ kind: 'thinking', text: ev.text ?? '' }];
+    if (type === 'text') return [{ kind: 'assistant', text: ev.text ?? '' }];
+    if (type === 'tool_call') return [dshToolCall(ev)];
+    if (type === 'tool_result') return [dshToolResult(ev)];
+    if (type === 'final') return [dshFinal(ev)];
+
     return [{ kind: 'raw', label: type || wrapper.kind, text: wrapper.text ?? stringifyContent(ev) }];
   }
 
@@ -487,6 +496,57 @@
     return { kind: 'session', label: type.replace('session.', ''), text: '' };
   }
 
+  // ----- DSH (dsh --profile headless --json) -----
+  function dshSession(ev) {
+    return {
+      kind: 'session',
+      label: '会话',
+      text: '',
+      chips: [
+        { k: 'session', v: String(ev.sessionId ?? '') },
+        ...(ev.cwd ? [{ k: 'cwd', v: String(ev.cwd) }] : []),
+      ],
+    };
+  }
+
+  function dshStatus(ev) {
+    const phase = String(ev.phase ?? '');
+    if (phase === 'step_end') {
+      const u = ev.usage ?? {};
+      return [{
+        kind: 'meta',
+        label: `第 ${ev.step ?? '?'} 步完成`,
+        text: `输入 ${u.inputTokens ?? 0} · 输出 ${u.outputTokens ?? 0} · 缓存 ${u.cacheReadTokens ?? 0}`,
+      }];
+    }
+    if (phase === 'turn_end') {
+      const reason = ev.reason?.kind ?? '';
+      return [{ kind: 'meta', label: `第 ${ev.turn ?? '?'} 轮结束`, text: reason }];
+    }
+    // turn_start / step_start：只留一行，别让日志被状态刷屏
+    return [];
+  }
+
+  function dshToolCall(ev) {
+    return { kind: 'tool_use', tool: { name: ev.name ?? ev.tool, input: ev.arguments } };
+  }
+
+  function dshToolResult(ev) {
+    return {
+      kind: 'tool_result',
+      tool: { ok: ev.status !== 'failed' && ev.status !== 'error', name: ev.name, output: stringifyContent(ev.result) },
+    };
+  }
+
+  function dshFinal(ev) {
+    return {
+      kind: 'result',
+      label: '最终结果',
+      text: stringifyContent(ev.text ?? ''),
+      chips: ev.reason?.kind ? [{ k: 'reason', v: String(ev.reason.kind) }] : [],
+    };
+  }
+
   onMount(() => {
     refresh();
     const timer = setInterval(refresh, POLL_INTERVAL);
@@ -593,6 +653,7 @@
                     <div class="run-meta">
                       <span>{run.harness}</span>
                       <span>{run.eventCount ?? run.events?.length ?? 0} events</span>
+                      {#if run.tokenUsage?.total}<span>{run.tokenUsage.total} tok</span>{/if}
                       {#if run.costUsd != null}<span>${Number(run.costUsd).toFixed(4)}</span>{/if}
                     </div>
                   </button>
@@ -621,6 +682,15 @@
                 <div><span>耗时</span><strong>{formatDuration(selectedRun)}</strong></div>
                 <div><span>PID</span><strong>{selectedRun.pid ?? '-'}</strong></div>
                 <div><span>MCP</span><strong>{(selectedRun.mcpServers ?? []).join(', ') || '-'}</strong></div>
+                {#if selectedRun.tokenUsage}
+                  <div class="col-span-full">
+                    <span>Token</span>
+                    <strong class="font-mono">
+                      输入 {selectedRun.tokenUsage.input} · 输出 {selectedRun.tokenUsage.output}
+                      · 缓存 {selectedRun.tokenUsage.cached} · 合计 {selectedRun.tokenUsage.total}
+                    </strong>
+                  </div>
+                {/if}
                 {#if selectedRun.harnessHome}
                   <div class="col-span-full"><span>用户 HOME</span><strong class="font-mono break-all">{selectedRun.harnessHome}</strong></div>
                 {/if}
