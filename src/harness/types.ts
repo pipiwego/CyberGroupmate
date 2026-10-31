@@ -72,6 +72,12 @@ export interface HarnessRunRecord {
     pid?: number;
     durationMs?: number;
     costUsd?: number;
+    /** 外部 harness 的会话标识（DSH 在开场的 session 事件里给，final 事件没有） */
+    sessionId?: string;
+    /** harness 实际使用的工作目录（DSH 在 session 事件里回报） */
+    workDir?: string;
+    /** harness 版本号，升级排查用 */
+    harnessVersion?: string;
     /** 累计 token 用量（DSH 在 step_end 事件里逐轮给） */
     tokenUsage?: { input: number; output: number; cached: number; total: number };
     stderrTail?: string;

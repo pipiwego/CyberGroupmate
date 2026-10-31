@@ -682,6 +682,19 @@
                 <div><span>耗时</span><strong>{formatDuration(selectedRun)}</strong></div>
                 <div><span>PID</span><strong>{selectedRun.pid ?? '-'}</strong></div>
                 <div><span>MCP</span><strong>{(selectedRun.mcpServers ?? []).join(', ') || '-'}</strong></div>
+                {#if selectedRun.harnessVersion}
+                  <div><span>Harness 版本</span><strong class="font-mono">{selectedRun.harnessVersion}</strong></div>
+                {/if}
+                {#if selectedRun.sessionId}
+                  <div class="col-span-full">
+                    <span>会话 ID</span><strong class="font-mono break-all">{selectedRun.sessionId}</strong>
+                  </div>
+                {/if}
+                {#if selectedRun.workDir}
+                  <div class="col-span-full">
+                    <span>工作目录</span><strong class="font-mono break-all">{selectedRun.workDir}</strong>
+                  </div>
+                {/if}
                 {#if selectedRun.tokenUsage}
                   <div class="col-span-full">
                     <span>Token</span>

@@ -307,7 +307,17 @@ export class HarnessManager {
             eventCount: 0,
         };
         this.currentRun = record;
-        this.recordEvent(record, "system", "launch", `启动 ${record.harness}，触发方式 ${trigger}，待处理 ${pending.length} 条，MCP: ${mcpServers.join(", ")}`);
+        // 可选：launcher 能报版本就记下来，升级后排查用
+        const versionOf = (this.config.launcher as { detectVersion?: () => string | undefined }).detectVersion;
+        if (typeof versionOf === "function") {
+            try {
+                const version = versionOf.call(this.config.launcher);
+                if (version) record.harnessVersion = version;
+            } catch {
+                /* 版本探测失败不影响做梦 */
+            }
+        }
+        this.recordEvent(record, "system", "launch", `启动 ${record.harness}${record.harnessVersion ? ` ${record.harnessVersion}` : ""}，触发方式 ${trigger}，待处理 ${pending.length} 条，MCP: ${mcpServers.join(", ")}`);
         this.recordEvent(record, "system", "home", `HOME=${harnessHome}；system prompt 写入 ${instructionPath}`);
 
         let receivedResult = false;
@@ -609,6 +619,8 @@ export class HarnessManager {
                 if (ev.text.includes("scheduled")) record.trigger = "scheduled";
                 const mcpMatch = ev.text.match(/MCP:\s*(.+)$/);
                 if (mcpMatch) record.mcpServers = mcpMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+                const verMatch = ev.text.match(/^启动\s+(\S+)\s+([0-9][\w.+-]*)/);
+                if (verMatch) record.harnessVersion = verMatch[2];
             } else if (ev.kind === "home" && ev.text) {
                 const homeMatch = ev.text.match(/HOME=([^；;]+)/);
                 if (homeMatch) record.harnessHome = homeMatch[1].trim();
@@ -636,6 +648,21 @@ export class HarnessManager {
                 if (item?.type === "agent_message" && typeof item.text === "string") {
                     record.resultSummary = item.text.slice(0, 500);
                 }
+            } else if (raw?.type === "session") {
+                // DSH：sessionId 只在开场事件里，重放日志时同样只认这一处
+                if (typeof raw.sessionId === "string" && raw.sessionId) record.sessionId = raw.sessionId;
+                if (typeof raw.cwd === "string" && raw.cwd) record.workDir = raw.cwd;
+            } else if (raw?.type === "status" && raw.phase === "step_end" && raw.usage) {
+                // DSH：重放时重建 token 累计
+                const usage = raw.usage as Record<string, unknown>;
+                const acc = record.tokenUsage ?? { input: 0, output: 0, cached: 0, total: 0 };
+                acc.input += Number(usage.inputTokens ?? 0) || 0;
+                acc.output += Number(usage.outputTokens ?? 0) || 0;
+                acc.cached += Number(usage.cacheReadTokens ?? 0) || 0;
+                acc.total += Number(usage.totalTokens ?? 0) || 0;
+                record.tokenUsage = acc;
+            } else if (raw?.type === "final") {
+                if (typeof raw.text === "string") record.resultSummary = raw.text.slice(0, 500);
             }
         }
         if (record.durationMs == null && record.endedAt != null) record.durationMs = record.endedAt - record.startedAt;
@@ -774,15 +801,28 @@ export class HarnessManager {
                 } else if (event.type === "turn.completed") {
                     log.debug("codex harness turn completed", { usage: event.usage });
                     onResult?.();
+                } else if (event.type === "session") {
+                    // DSH headless --json：开场事件，sessionId 只在这里出现。
+                    // final 事件没有 sessionId，续跑必须靠这里存下的值。
+                    if (typeof event.sessionId === "string" && event.sessionId) {
+                        record.sessionId = event.sessionId;
+                    }
+                    if (typeof event.cwd === "string" && event.cwd && !record.workDir) {
+                        record.workDir = event.cwd;
+                    }
+                    log.info("dsh harness session", {
+                        sessionId: record.sessionId ?? null,
+                        cwd: record.workDir ?? null,
+                    });
                 } else if (event.type === "final") {
-                    // DSH headless --json：终止事件，text 即最终答案
-                    log.info("dsh harness final", { sessionId: event.sessionId ?? null });
+                    // DSH headless --json：终止事件，text 即最终答案。
+                    // 注意 final 只带 type 与 text，sessionId 来自上面的 session 事件。
+                    log.info("dsh harness final", {
+                        sessionId: record.sessionId ?? null,
+                        hasText: typeof event.text === "string",
+                    });
                     if (typeof event.text === "string") {
                         record.resultSummary = event.text.slice(0, 500);
-                    }
-                    if (typeof event.sessionId === "string") {
-                        record.resultSummary = record.resultSummary
-                            ?? `[dsh] session ${event.sessionId}`;
                     }
                     onResult?.();
                 } else if (event.type === "status") {

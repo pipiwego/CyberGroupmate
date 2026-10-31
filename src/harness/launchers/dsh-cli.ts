@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "../../core/logger.js";
@@ -20,6 +20,16 @@ const DEFAULT_MODEL = "deepseek-flash";
  * 一次做梦 = 一次 `dsh --profile headless --json <prompt>` 进程。
  * 人格 prompt 写进 $DSH_HOME/AGENTS.md，做梦结束后还原。
  * MCP 服务器与模型通过临时 patch 文件注入，不修改用户的 profile。
+ *
+ * 与版本相关的硬性约束（实测于 0.2.1-rc.5，升级后必须重新核对）：
+ *
+ * 1. `--profile` 与 `--patch` 属于启动器选项，必须排在应用参数（`--json`、任务文本）
+ *    之前。顺序颠倒会得到 `{"type":"error","message":"unknown option '--patch'"}`，
+ *    进程立即以退出码 1 结束，且只有这一行输出。
+ * 2. 该版本没有 `--approval-policy` 与 `--permission-mode`；官方文档写的是更新的版本。
+ *    不要为了「无人值守」而传它们。实测 headless 写工作区文件不触发审批。
+ * 3. `final` 事件只含 `type` 与 `text`，没有 `sessionId`；会话标识只能在开场的
+ *    `session` 事件里拿。
  */
 export class DshCliLauncher implements HarnessLauncher {
     readonly name = "dsh";
@@ -27,6 +37,9 @@ export class DshCliLauncher implements HarnessLauncher {
     private dshHome?: string;
     private apiKey?: string;
     private provider: string;
+
+    /** 版本号只探一次，供日志与运行记录使用 */
+    private resolvedVersion?: string;
 
     constructor(opts?: {
         dshPath?: string;
@@ -77,6 +90,9 @@ export class DshCliLauncher implements HarnessLauncher {
         };
         if (this.apiKey) extraEnv.DEEPSEEK_API_KEY = this.apiKey;
 
+        const version = this.detectVersion();
+        if (version) log.info("dsh version", { version });
+
         log.info("launching dsh", {
             dsh: this.dshPath,
             model,
@@ -104,6 +120,22 @@ export class DshCliLauncher implements HarnessLauncher {
         child.once("error", cleanup);
 
         return child;
+    }
+
+    /** 读一次 `dsh --version`，失败返回 undefined（不影响做梦） */
+    detectVersion(): string | undefined {
+        if (this.resolvedVersion !== undefined) return this.resolvedVersion || undefined;
+        try {
+            const out = execFileSync(this.dshPath, ["--version"], {
+                timeout: 10_000,
+                encoding: "utf-8",
+                stdio: ["ignore", "pipe", "ignore"],
+            }).trim();
+            this.resolvedVersion = out.split(/\r?\n/)[0]?.trim() ?? "";
+        } catch {
+            this.resolvedVersion = "";
+        }
+        return this.resolvedVersion || undefined;
     }
 
     /**
