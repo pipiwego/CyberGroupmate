@@ -74,6 +74,8 @@ const DEFAULT_EAGER_SILENCE = 30 * 1000;       // 30 sec
 const DEFAULT_MAX_FLUSH_BATCH = 120;
 /** buffer 总量硬上限：持续失败时防止 unshift 回退让 buffer 无限膨胀（越滚越大死亡螺旋），超出丢最旧。 */
 const DEFAULT_MAX_BUFFER_SIZE = 1000;
+/** 缓冲区最早消息的最大滞留时间；超过则无视 minFlushSize 强制 flush。0 = 关闭 */
+const DEFAULT_MAX_BUFFER_AGE_MS = 10 * 60 * 1000;
 /** 本轮批次未排空时，下一次自动 flush 的短延迟（毫秒），用于尽快排空积压。 */
 const DRAIN_REARM_DELAY_MS = 3000;
 
@@ -116,6 +118,7 @@ export class RecordingPipeline extends EventEmitter {
     private readonly eagerSilence: number;
     private readonly maxFlushBatch: number;
     private readonly maxBufferSize: number;
+    private readonly maxBufferAgeMs: number;
 
     constructor(
         private registry: TopicRegistry,
@@ -135,6 +138,7 @@ export class RecordingPipeline extends EventEmitter {
         this.eagerSilence = pipelineConfig?.eagerSilenceMs ?? DEFAULT_EAGER_SILENCE;
         this.maxFlushBatch = clampPositiveInt(pipelineConfig?.maxFlushBatch, DEFAULT_MAX_FLUSH_BATCH);
         this.maxBufferSize = clampPositiveInt(pipelineConfig?.maxBufferSize, DEFAULT_MAX_BUFFER_SIZE);
+        this.maxBufferAgeMs = pipelineConfig?.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS;
     }
 
     /**
@@ -212,9 +216,22 @@ export class RecordingPipeline extends EventEmitter {
         if (this.isFlushing || this.buffer.length === 0) return;
         // 静默触发时检查最低消息数（条数阈值触发的已在 onMessage 中保证）
         if (this.buffer.length < this.minFlushSize) {
+            // 时间兜底：安静群攒不够条数时，最早一条超龄就强制走，否则永远出不来
+            const oldestTs = this.buffer[0]?.timestamp ?? 0;
+            const age = oldestTs > 0 ? Date.now() - oldestTs : 0;
+            if (this.maxBufferAgeMs > 0 && age >= this.maxBufferAgeMs) {
+                log.info("静默触发超龄放行：无视 minFlushSize 强制 flush", {
+                    bufferSize: this.buffer.length,
+                    minFlushSize: this.minFlushSize,
+                    oldestAgeMin: Math.round(age / 60000),
+                });
+                void this.flush();
+                return;
+            }
             log.debug("静默触发跳过：buffer 消息数不足", {
                 bufferSize: this.buffer.length,
                 minFlushSize: this.minFlushSize,
+                oldestAgeMin: Math.round(age / 60000),
             });
             // 重置计时器，等待更多消息
             this.resetSilenceTimer();

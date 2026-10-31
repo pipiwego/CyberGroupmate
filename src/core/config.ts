@@ -409,6 +409,12 @@ export interface RecordingPipelineConfig {
     maxFlushBatch?: number;
     /** buffer 总量硬上限（超出丢最旧消息，防持续失败时无限膨胀＝死亡螺旋）。默认 1000 */
     maxBufferSize?: number;
+    /**
+     * 缓冲区最早一条消息的最大滞留时间（毫秒）。默认 600000 (10 min)。
+     * 静默到期但消息数不足 minFlushSize 时，若最早一条已超过这个时长，
+     * 仍然强制 flush，避免安静群消息永远出不来。设 0 关闭兜底。
+     */
+    maxBufferAgeMs?: number;
 }
 
 /** Dashboard 外部配置 */
@@ -1240,6 +1246,7 @@ function parseRecordingPipelineConfig(fileConfig: Record<string, unknown>): Reco
         eagerSilenceMs: raw.eager_silence_ms != null ? num(raw.eager_silence_ms, 30000) : undefined,
         maxFlushBatch: raw.max_flush_batch != null ? num(raw.max_flush_batch, 120) : undefined,
         maxBufferSize: raw.max_buffer_size != null ? num(raw.max_buffer_size, 1000) : undefined,
+        maxBufferAgeMs: raw.max_buffer_age_ms != null ? num(raw.max_buffer_age_ms, 600000) : undefined,
     };
 }
 
@@ -1760,6 +1767,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.eagerThreshold != null) rp.eager_threshold = p.eagerThreshold;
         if (p.normalSilenceMs != null) rp.normal_silence_ms = p.normalSilenceMs;
         if (p.eagerSilenceMs != null) rp.eager_silence_ms = p.eagerSilenceMs;
+        if (p.maxBufferAgeMs != null) rp.max_buffer_age_ms = p.maxBufferAgeMs;
         obj.recording_pipeline = rp;
     }
 
